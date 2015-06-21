@@ -1,0 +1,188 @@
+---
+title: "MachineLearningWriteup"
+author: "tonyfrommaine"
+date: "June 20, 2015"
+output: html_document
+---
+
+##Coursera Practical Machine Learning - Course Project  
+
+
+##Overview  
+This is taken directly from the Class Requirements:  
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it.  
+
+In this project, the goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).  
+
+The goal of the project is to predict the manner in which they did the exercise. This is the “classe” variable in the training set. You may use any of the other variables to predict with. You should create a report describing how you built your model, how you used cross validation, what you think the expected out of sample error is, and why you made the choices you did. You will also use your prediction model to predict 20 different test cases.  
+
+The submission should consist of a link to a Github repo with your R markdown and compiled HTML file describing your analysis. Please constrain the text of the writeup to < 2000 words and the number of figures to be less than 5. It will make it easier for the graders if you submit a repo with a gh-pages branch so the HTML page can be viewed online (and you always want to make it easy on graders.  
+
+Apply the machine learning algorithm to the 20 test cases available in the test data above. Submit the predictions in appropriate format to the programming assignment for automated grading.  
+
+
+## My Approach    
+Since this type of data was worked with on previous projects as part of this specialization,
+I was somewhat familiar with the structure of the data.  With this knowledge, I created a series of data cleansing before anything was done with the data.  As a good practice, even though not required, I anonomysed the data by taking the person's name out of the data.  
+I ran this analsyis on my MBA with 8G memory and added cluster paraellization.   This was due to the fact that I wanted to show the code, if you do not want to bog down with the various runs, the code can be commented out.   
+I have also provided logic to avoid redownloading the data if it is already present 
+on the working directory and set a s seed for reproducabity.  
+
+## My conclusion  
+After cleaning the data and doings some exploratory analysis, my conclusion is that a random forrest routine with ntree of 1000 is my choice for solving the issue.  Why ntree 1000?  It runs in a reasonable timeframe and gets the OBS low enough to make going beyond 100 worth it.  
+The results are as follows:    
+Using a training set of 75% and a testing set of 25% a  95% CI : (0.9913, 0.9959), with Kappa of .9923.  
+
+## Code and Results  
+### Load the packages    
+
+```{r}
+require("caret");
+require("ggplot2");
+require("rpart");
+require("rpart.plot");
+require("rattle");
+require("randomforrest");
+require("doParallel");
+cl <- makeCluster(detectCores());
+registerDoParallel(cl);
+```  
+
+### Set a seed for reproducabilty  
+```{r}
+set.seed(1964);
+```  
+
+### Download the Data, but only if it has not been downloaded before  
+```{r}
+if (!file.exists("trainingset.csv")){
+        download.file("http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv",destfile="trainingset.csv",method="curl");
+        }
+if (!file.exists("testingset.csv")){    
+    download.file("http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv",destfile="testingset.csv",method="curl");
+        }
+```    
+
+### Data Cleansing - The data has NA's, blanks and DIV/0. They must be taken out first.  
+```{r}
+trainingData <- read.csv("trainingset.csv", na.strings = c("NA", "", "#DIV/0!"));
+testingData <- read.csv("testingset.csv", na.strings = c("NA", "", "#DIV/0!"));
+```    
+
+### Anonymize the Data  
+As stated earlier, taking the names out to anonymize the data is a good practice and this will remove the names.    
+```{r}
+testingData <- testingData[,-2];
+trainingData <- trainingData[,-2];
+```   
+
+### Remove non-impactful data  
+Since we don't want to analyze variables about the time we remove those also.  BTW: could be interesting side analysis in looking at times that would b more likely, but way out of scope of this analysis! 
+```{r}
+
+testingData <- testingData[,-c(1:6)];
+trainingData <- trainingData[,-c(1:6)];
+```    
+
+### Remove rows with all NA's and Columns with all NA's   
+This keeps noise out of the model that will not have an impact.  
+```{r}
+nothingIn <- apply(trainingData, 1, function(x) all(is.na(x)));
+trainingData <- trainingData[!nothingIn,];
+nothingIn <- apply(testingData, 1, function(x) all(is.na(x)));
+testingData <- testingData[!nothingIn,];
+trainingData<-trainingData[,colSums(is.na(trainingData)) == 0]
+testingData <-testingData[,colSums(is.na(testingData)) == 0]
+```  
+
+### Check the data  
+At this point we should now have a clean set of data that we can start to segregate to our training and test sets using cross validation of a p=.75. 
+```{r}
+trainBaseSet <- createDataPartition(y=trainingData$classe, p=0.75, list=FALSE)
+RealTrainingSet <- trainingData[trainBaseSet, ]; 
+RealTestingSet <- trainingData[-trainBaseSet, ];
+```   
+
+### Explore the data  
+There is a fairly even distribution of our A,B,C,D, E    
+```{r}
+summary(RealTrainingSet$classe);
+## Confirm this with a simple plot
+plot(RealTrainingSet$classe,col="red",ylab="Frequency of classe",xlab="class",main="Distribution of Class for Training Data");
+```    
+
+### Explore with Decision Tree  
+```{r}
+modFit <- train(classe ~., method="rpart", data=RealTrainingSet);
+fancyRpartPlot(modFit$finalModel);
+```  
+
+Based on both the distribution and decision tree, I decided to use a random forest 
+approach. 
+
+## Create the Model  
+In the following section I create the model using random forests.  
+SPECIAL NOTE TO EVALUATOR:  I have included commands to run multiple versions of 
+random forest with different ntrees.  My thought was to push it higher and higher to look
+for greater precision, so I have elft them in here for traceability of my logic, but they have no real bearing on the final model.    
+I have left all the runs in here to show what I did, but you may want to comment out some of the runs to avoid long run times.  
+
+## Using Random Forrest Method as part of train call.  
+
+### Run the model for 20,50, 100 and 1000 ntree.  AGAIN, PLEASE NOTE THESE WILL RUN FOR A LONG TIME AND ARE PROVIDED TO SHOW MY PROCESS, THUS YOU MAY WANT TO COMMENT OUT SOME OF THESE.    
+```{r}
+modFit <- train(classe ~ ., method = "rf", data = RealTrainingSet,ntree=10);
+rf10 <- modFit$finalModel;
+modFit <- train(classe ~ ., method = "rf", data = RealTrainingSet,ntree=20);
+rf20 <- modFit$finalModel;
+modFit <- train(classe ~ ., method = "rf", data = RealTrainingSet,ntree=50);
+rf50 <- modFit$finalModel;
+modFit <- train(classe ~ ., method = "rf", data = RealTrainingSet,ntree=100);
+rf100 <- modFit$finalModel;
+modFit <- train(classe ~ ., method = "rf", data = RealTrainingSet,ntree=1000);
+rf1000 <- modFit$finalModel;
+### Examine results to see impact of increase in ntree
+rf10;
+rf20;
+rf50;
+rf100;
+rf1000;
+```   
+
+### Results  
+Although it takes significantly more processing time, using the higher ntree brings us
+to under 1% OOB and is worth the processing time.  If though, processing time was limited ntree 100 would still be pretty close.    
+So, let's now predict using the Testing set to see what the results will be.    
+```{r}
+predictrf1000 <- predict(rf1000,RealTestingSet,type="class");
+```  
+
+The confusion matrix is as follows and gives us an accuracy of .9939 with an expected out of sample error of .0059 or 0.59%, and 95% CI : (0.9913, 0.9959).  
+```{r}
+confusionMatrix(predictrf1000,RealTestingSet$class);
+```  
+
+## Submission of Data  
+Now using the testing data set that we put aside in the beginning, we can can now predict our values.  
+```{r}
+predictrf1000 <- predict(rf1000,testingData,type="class");
+predictrf1000;
+##Stop the parallel cluster
+stopCluster(cl);
+```
+
+## Submission for Grades  
+This code was used directly from the instructions in the Coursera to create the single text files for submission.  
+```{r}
+answers <- as.character(predictrf1000);
+pml_write_files = function(x){
+        n = length(x)
+        for(i in 1:n){
+                filename = paste0("problem_id_",i,".txt")
+                write.table(x[i], file=filename, quote=FALSE, row.names=FALSE, 
+                            col.names=FALSE)
+        }
+}
+pml_write_files(answers);
+```
